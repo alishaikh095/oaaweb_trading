@@ -1,5 +1,5 @@
 /**
- * Swing strategy — trend following on 4H candles.
+ * Swing strategy — trend following on 4H candles, filtered by price action.
  *
  * Rules, checked in priority order (first match wins):
  *  1. Fresh death cross (fast EMA below slow EMA)        → Take Profit
@@ -8,12 +8,17 @@
  *  4. RSI bounced from oversold (climbs back above 30)   → Strong Buy (uptrend) / Accumulate (downtrend)
  *  5. Established uptrend                                → Accumulate (or Trim if RSI is overbought)
  *  6. Established downtrend                              → Take Profit
+ *
+ * A cross only counts once the fast EMA has stayed on the new side for `confirmBars`
+ * candles (filters whipsaws). Strong Buy is downgraded to Accumulate while price
+ * structure is still lower highs / lower lows.
  */
 import { SWING_CONFIG, type SwingConfig } from "@/config/strategy";
 import { atr, crossedAbove, crossedBelow, ema, findLastIndex, rsi } from "@/lib/indicators";
-import type { Candle, StrategyResult, SwingAction } from "@/lib/types";
+import type { Candle, PriceAction, StrategyResult, SwingAction } from "@/lib/types";
+import { priceActionChecks } from "./checks";
 
-export function evaluateSwing(candles: Candle[], cfg: SwingConfig = SWING_CONFIG): StrategyResult {
+export function evaluateSwing(candles: Candle[], pa: PriceAction, cfg: SwingConfig = SWING_CONFIG): StrategyResult {
   const closes = candles.map((c) => c.close);
   const fast = ema(closes, cfg.emaFast);
   const slow = ema(closes, cfg.emaSlow);
@@ -25,15 +30,21 @@ export function evaluateSwing(candles: Candle[], cfg: SwingConfig = SWING_CONFIG
   const crossFrom = last - cfg.crossLookback + 1;
   const rsiFrom = last - cfg.rsiLookback + 1;
 
-  const golden = findLastIndex(crossFrom, last, (i) => crossedAbove(fast, slow, i));
-  const death = findLastIndex(crossFrom, last, (i) => crossedBelow(fast, slow, i));
+  /** True when the side set at bar i held for confirmBars candles. */
+  const held = (i: number, above: boolean) => {
+    if (i + cfg.confirmBars - 1 > last) return false;
+    for (let j = i; j < i + cfg.confirmBars; j++) if (above ? fast[j] <= slow[j] : fast[j] >= slow[j]) return false;
+    return true;
+  };
+  const isGolden = (i: number) => crossedAbove(fast, slow, i) && held(i, true);
+  const isDeath = (i: number) => crossedBelow(fast, slow, i) && held(i, false);
+
+  const golden = findLastIndex(crossFrom, last, isGolden);
+  const death = findLastIndex(crossFrom, last, isDeath);
   const obReject = findLastIndex(rsiFrom, last, (i) => rsiLine[i - 1] >= cfg.overbought && rsiLine[i] < cfg.overbought);
   const osBounce = findLastIndex(rsiFrom, last, (i) => rsiLine[i - 1] <= cfg.oversold && rsiLine[i] > cfg.oversold);
-  // Start of the current trend (most recent cross of any kind, anywhere in history).
-  const trendStart = Math.max(
-    0,
-    findLastIndex(1, last, (i) => crossedAbove(fast, slow, i) || crossedBelow(fast, slow, i)),
-  );
+  // Start of the current trend (most recent confirmed cross, anywhere in history).
+  const trendStart = Math.max(0, findLastIndex(1, last, (i) => isGolden(i) || isDeath(i)));
 
   let action: SwingAction;
   let trigger: number;
@@ -61,6 +72,9 @@ export function evaluateSwing(candles: Candle[], cfg: SwingConfig = SWING_CONFIG
     fresh = false;
   }
 
+  // Price action filter.
+  if (cfg.requireStructure && action === "Strong Buy" && pa.structure === "downtrend") action = "Accumulate";
+
   const bullishAction = action === "Strong Buy" || action === "Accumulate";
   const r = rsiLine[last];
 
@@ -72,7 +86,7 @@ export function evaluateSwing(candles: Candle[], cfg: SwingConfig = SWING_CONFIG
     checks: [
       { label: `EMA${cfg.emaFast} ${uptrend ? ">" : "<"} EMA${cfg.emaSlow} (${uptrend ? "uptrend" : "downtrend"})`, passed: uptrend === bullishAction },
       {
-        label: bullishAction ? `Golden cross in last ${cfg.crossLookback} bars` : `Death cross in last ${cfg.crossLookback} bars`,
+        label: bullishAction ? `Golden cross in last ${cfg.crossLookback} candles` : `Death cross in last ${cfg.crossLookback} candles`,
         passed: bullishAction ? golden >= 0 : death >= 0,
       },
       {
@@ -83,6 +97,7 @@ export function evaluateSwing(candles: Candle[], cfg: SwingConfig = SWING_CONFIG
         label: bullishAction ? `RSI not overbought (< ${cfg.overbought})` : `RSI not oversold (> ${cfg.oversold})`,
         passed: bullishAction ? r < cfg.overbought : r > cfg.oversold,
       },
+      ...priceActionChecks(pa, bullishAction),
     ],
     indicators: {
       [`EMA${cfg.emaFast}`]: fast[last],
@@ -90,6 +105,5 @@ export function evaluateSwing(candles: Candle[], cfg: SwingConfig = SWING_CONFIG
       RSI: r,
       ATR: atrLine[last],
     },
-    atr: atrLine[last],
   };
 }

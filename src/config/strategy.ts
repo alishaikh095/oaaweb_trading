@@ -26,6 +26,12 @@ export interface DailyConfig {
   atrPeriod: number;
   /** A signal older than this many bars is flagged as stale. */
   freshBars: number;
+  /** All 3 conditions must hold for this many closed candles in a row before a signal fires. */
+  confirmBars: number;
+  /** Once active, the signal only drops to Neutral when this many conditions (or fewer) still pass. */
+  exitMaxPassing: number;
+  /** Block Buy in a lower-highs/lower-lows structure (and Sell in a higher-highs/higher-lows one). */
+  requireStructure: boolean;
   risk: RiskConfig;
 }
 
@@ -42,8 +48,33 @@ export interface SwingConfig {
   crossLookback: number;
   /** An RSI bounce / rejection within this many bars counts as fresh. */
   rsiLookback: number;
+  /** An EMA cross only counts once the fast EMA has stayed on the new side for this many candles. */
+  confirmBars: number;
+  /** Downgrade Strong Buy to Accumulate when price structure is still making lower highs/lows. */
+  requireStructure: boolean;
   risk: RiskConfig;
 }
+
+/** Price action (market structure, support/resistance, candlestick patterns). */
+export interface PriceActionConfig {
+  /** A swing high/low needs this many candles on each side that are lower/higher. */
+  pivotLeft: number;
+  pivotRight: number;
+  /** Look for candlestick patterns in the last N closed candles. */
+  patternLookback: number;
+  /** Ignore patterns on candles smaller than this many ATRs (filters out noise). */
+  minPatternRangeAtr: number;
+  /** Support/resistance comes from swing points in the last N candles. */
+  srLookback: number;
+}
+
+export const PRICE_ACTION_CONFIG: PriceActionConfig = {
+  pivotLeft: 3,
+  pivotRight: 3,
+  patternLookback: 3,
+  minPatternRangeAtr: 0.5,
+  srLookback: 150,
+};
 
 export const DAILY_CONFIG: DailyConfig = {
   interval: "1h",
@@ -55,6 +86,9 @@ export const DAILY_CONFIG: DailyConfig = {
   macdSignal: 9,
   atrPeriod: 14,
   freshBars: 12,
+  confirmBars: 2,
+  exitMaxPassing: 1,
+  requireStructure: true,
   risk: {
     entryZoneAtr: 0.3,
     swingLookback: 12,
@@ -76,6 +110,8 @@ export const SWING_CONFIG: SwingConfig = {
   atrPeriod: 14,
   crossLookback: 12,
   rsiLookback: 6,
+  confirmBars: 2,
+  requireStructure: true,
   risk: {
     entryZoneAtr: 0.5,
     swingLookback: 20,

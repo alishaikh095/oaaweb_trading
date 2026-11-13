@@ -7,7 +7,7 @@
  */
 import type { RiskConfig } from "@/config/strategy";
 import { highest, lowest } from "@/lib/indicators";
-import type { Candle, Direction, TradeLevels } from "@/lib/types";
+import type { Candle, Direction, TradeLevels, TradeStatus } from "@/lib/types";
 
 const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
 
@@ -51,4 +51,27 @@ export function computeLevels(
       rr,
     })),
   };
+}
+
+/**
+ * How a trade has played out on the closed candles after `fromIndex`.
+ * If a candle touches both the stop and a target, the stop is assumed to hit first.
+ */
+export function tradeStatus(
+  candles: Candle[],
+  fromIndex: number,
+  levels: TradeLevels,
+  direction: Direction,
+): TradeStatus {
+  const long = direction === "long";
+  const [tp1, tp2] = levels.takeProfits.map((t) => t.price);
+  let tp1Hit = false;
+  for (let i = fromIndex + 1; i < candles.length; i++) {
+    const c = candles[i];
+    const stopped = long ? c.low <= levels.stopLoss : c.high >= levels.stopLoss;
+    if (stopped) return tp1Hit ? "TP1 hit" : "Stopped out";
+    if (tp2 !== undefined && (long ? c.high >= tp2 : c.low <= tp2)) return "TP2 hit";
+    if (tp1 !== undefined && (long ? c.high >= tp1 : c.low <= tp1)) tp1Hit = true;
+  }
+  return tp1Hit ? "TP1 hit" : "Active";
 }

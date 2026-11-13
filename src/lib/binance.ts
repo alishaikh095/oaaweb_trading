@@ -23,14 +23,32 @@ export const isInterval = (v: string): v is Interval => v in INTERVAL_MS;
 /** Raw kline row: [openTime, open, high, low, close, volume, closeTime, ...] */
 type RawKline = [number, string, string, string, string, string, number, ...unknown[]];
 
+/**
+ * Short in-memory cache (per server instance). Unlike Next's fetch cache, it never
+ * serves stale data: an entry older than CACHE_TTL_MS is refetched before use.
+ */
+const CACHE_TTL_MS = 20_000;
+const cache = new Map<string, { at: number; data: Promise<Candle[]> }>();
+
 export async function fetchKlines(symbol: string, interval: Interval, limit = 500): Promise<Candle[]> {
+  const key = `${symbol}:${interval}:${limit}`;
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.data;
+
+  const data = fetchFromBinance(symbol, interval, limit);
+  cache.set(key, { at: Date.now(), data });
+  data.catch(() => cache.delete(key)); // don't cache failures
+  return data;
+}
+
+async function fetchFromBinance(symbol: string, interval: Interval, limit: number): Promise<Candle[]> {
   const query = new URLSearchParams({ symbol, interval, limit: String(Math.min(limit, 1000)) });
   let lastError: unknown;
 
   for (const base of BASE_URLS) {
     try {
       const res = await fetch(`${base}/api/v3/klines?${query}`, {
-        next: { revalidate: 30 },
+        cache: "no-store",
         signal: AbortSignal.timeout(8_000),
       });
       if (!res.ok) throw new Error(`${base} responded ${res.status}`);
@@ -50,9 +68,11 @@ export async function fetchKlines(symbol: string, interval: Interval, limit = 50
   throw new Error(`Failed to fetch ${symbol} ${interval} klines: ${String(lastError)}`);
 }
 
-/** Drops the still-forming last candle so signals only use closed bars. */
-export function closedCandles(candles: Candle[], interval: Interval, now = Date.now()): Candle[] {
-  const last = candles[candles.length - 1];
-  if (last && last.time * 1000 + INTERVAL_MS[interval] > now) return candles.slice(0, -1);
-  return candles;
+/**
+ * Drops the still-forming candle. Binance always returns the current (open) candle
+ * last, so removing it is correct even when the response came from a short cache —
+ * a time-based check could mistake a stale "almost closed" candle for a closed one.
+ */
+export function closedCandles(candles: Candle[]): Candle[] {
+  return candles.slice(0, -1);
 }

@@ -57,6 +57,19 @@ The signal time is the bar where all three conditions first lined up. After 12 b
 5. Established uptrend → **Accumulate** (or **Trim** if RSI ≥ 70)
 6. Established downtrend → **Take Profit**
 
+**Price action** (both modes, `lib/signals/priceAction.ts` + `patterns.ts`):
+- *Market structure* from confirmed swing points (3 candles each side): higher highs + higher lows = uptrend, lower highs + lower lows = downtrend, else range.
+- *Support / resistance*: nearest swing low below price and swing high above it (last 150 candles).
+- *Breakout*: close beyond the most recent swing high / low.
+- *Candlestick patterns* in the last 3 closed candles: hammer, shooting star, engulfing, harami, morning/evening star, marubozu, outside/inside bar, doji, three soldiers/crows. Candles smaller than 0.5 ATR are ignored, and reversal patterns need a prior move the other way.
+- Filters: Daily Buy is blocked in a downtrend structure (Sell in an uptrend); Swing Strong Buy is downgraded to Accumulate in a downtrend structure. Structure and pattern also count toward the confidence %.
+
+**Stability** — signals only change when a candle closes:
+- Daily needs all 3 conditions for 2 closed candles in a row, and only exits when 2 of 3 fail.
+- Swing EMA crosses must hold for 2 candles.
+- Entry / SL / TP are calculated once from the trigger candle and stay fixed; the card tracks whether TP1, TP2 or the stop has been hit since.
+- Binance data is cached in memory for 20 s at most (never served stale).
+
 **Levels** — Entry zone extends a fraction of ATR on the favourable side of price.
 Stop loss goes just beyond the recent swing low/high, clamped between a min and max number of ATRs.
 TP1 = 1:2 and TP2 = 1:3 risk/reward. All in `config/strategy.ts`.

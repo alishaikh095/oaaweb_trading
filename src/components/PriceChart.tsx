@@ -10,10 +10,13 @@ import {
   type AutoscaleInfo,
   type IChartApi,
   type ISeriesApi,
+  type SeriesMarker,
+  type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { REFRESH_MS, SWING_CONFIG } from "@/config/strategy";
-import { ema, vwap } from "@/lib/indicators";
+import { PRICE_ACTION_CONFIG, REFRESH_MS, SWING_CONFIG } from "@/config/strategy";
+import { atr, ema, vwap } from "@/lib/indicators";
+import { detectPatternsAt } from "@/lib/signals/patterns";
 import { actionTone, CHART_COLORS } from "@/lib/format";
 import type { Candle, CandlesResponse, Signal } from "@/lib/types";
 
@@ -74,8 +77,12 @@ export default function PriceChart({ signal }: { signal: Signal }) {
       autoscaleInfoProvider: (original: () => AutoscaleInfo | null) => {
         const res = original();
         const lv = signal.levels;
-        if (!res?.priceRange || !lv) return res;
-        const prices = [lv.stopLoss, lv.entryLow, lv.entryHigh, ...lv.takeProfits.map((t) => t.price)];
+        const { support, resistance } = signal.priceAction;
+        const prices = [
+          ...(lv ? [lv.stopLoss, lv.entryLow, lv.entryHigh, ...lv.takeProfits.map((t) => t.price)] : []),
+          ...[support, resistance].filter((p): p is number => p !== null),
+        ];
+        if (!res?.priceRange || prices.length === 0) return res;
         return {
           ...res,
           priceRange: {
@@ -112,24 +119,57 @@ export default function PriceChart({ signal }: { signal: Signal }) {
       levels.takeProfits.forEach((tp) => priceLine(tp.price, CHART_COLORS.bull, tp.label));
     }
 
-    // Marker on the trigger bar
+    // Support / resistance from swing points
+    const { support, resistance } = signal.priceAction;
+    const srLine = (price: number, color: string, title: string) =>
+      series.createPriceLine({ price, color, title, lineStyle: LineStyle.SparseDotted, lineWidth: 2, axisLabelVisible: true });
+    if (support !== null) srLine(support, "rgba(16,185,129,0.6)", "S");
+    if (resistance !== null) srLine(resistance, "rgba(244,63,94,0.6)", "R");
+
+    // Markers: bullish/bearish candle patterns on closed candles + the signal trigger
+    const closed = candles.slice(0, -1);
+    const atrLine = atr(closed, 14);
+    const markers: SeriesMarker<Time>[] = [];
+    for (let i = Math.max(5, closed.length - 150); i < closed.length; i++) {
+      const p = detectPatternsAt(closed, i, atrLine[i], PRICE_ACTION_CONFIG.minPatternRangeAtr).find(
+        (x) => x.bias !== "neutral",
+      );
+      if (!p) continue;
+      const bull = p.bias === "bullish";
+      markers.push({
+        time: closed[i].time as UTCTimestamp,
+        position: bull ? "belowBar" : "aboveBar",
+        shape: "circle",
+        size: 0.6,
+        color: bull ? "rgba(16,185,129,0.8)" : "rgba(244,63,94,0.8)",
+        // Label only the patterns the signal uses (last few candles); older ones are dots.
+        text: i >= closed.length - PRICE_ACTION_CONFIG.patternLookback ? p.name : undefined,
+      });
+    }
+
     const tone = actionTone(signal.action);
     const isLong = signal.direction === "long";
     if (candles.some((c) => c.time === signal.triggerTime)) {
-      series.setMarkers([
-        {
-          time: signal.triggerTime as UTCTimestamp,
-          position: isLong ? "belowBar" : "aboveBar",
-          shape: signal.direction === "flat" ? "circle" : isLong ? "arrowUp" : "arrowDown",
-          color: tone === "bull" ? CHART_COLORS.bull : tone === "bear" ? CHART_COLORS.bear : CHART_COLORS.warn,
-          text: signal.action,
-        },
-      ]);
+      markers.push({
+        time: signal.triggerTime as UTCTimestamp,
+        position: isLong ? "belowBar" : "aboveBar",
+        shape: signal.direction === "flat" ? "circle" : isLong ? "arrowUp" : "arrowDown",
+        color: tone === "bull" ? CHART_COLORS.bull : tone === "bear" ? CHART_COLORS.bear : CHART_COLORS.warn,
+        text: signal.action,
+        size: 1.5,
+      });
     }
+    series.setMarkers(markers.sort((a, b) => (a.time as number) - (b.time as number)));
 
-    chart.timeScale().setVisibleLogicalRange({ from: candles.length - 120, to: candles.length + 5 });
+    // Show the last ~120 candles. Re-applied on the next frame because the container
+    // can still be resizing on first load, which would leave the candles squeezed.
+    const showRecent = () =>
+      chart.timeScale().setVisibleLogicalRange({ from: candles.length - 120, to: candles.length + 5 });
+    showRecent();
+    const frame = requestAnimationFrame(showRecent);
 
     return () => {
+      cancelAnimationFrame(frame);
       chart.remove();
       chartRef.current = null;
     };

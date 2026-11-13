@@ -1,14 +1,14 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { REFRESH_MS } from "@/config/strategy";
 import { actionTone, formatNumber, formatPrice, TONE_CLASSES, type Tone } from "@/lib/format";
 import type { Mode, Signal, SignalsResponse } from "@/lib/types";
 import { Header } from "./Header";
 import { SignalCard } from "./SignalCard";
-import { TimeAgo } from "./TimeAgo";
+import { Countdown, TimeAgo } from "./TimeAgo";
 
 // lightweight-charts needs the DOM — load it on the client only.
 const PriceChart = dynamic(() => import("./PriceChart"), {
@@ -48,6 +48,16 @@ export function Dashboard() {
   });
 
   const signals = useMemo(() => data?.signals ?? [], [data]);
+  const nextUpdateAt = signals[0]?.nextUpdateAt;
+
+  // Signals only change when a candle closes, so refresh right after each close.
+  useEffect(() => {
+    if (!nextUpdateAt) return;
+    const wait = nextUpdateAt - Date.now() + 5_000;
+    if (wait <= 0) return;
+    const id = setTimeout(() => mutate(), wait);
+    return () => clearTimeout(id);
+  }, [nextUpdateAt, mutate]);
   const counts = signals.reduce(
     (acc, s) => {
       acc[filterTone(s)]++;
@@ -164,6 +174,11 @@ export function Dashboard() {
           <h2 className="mr-2 text-lg font-semibold text-white">
             {mode === "daily" ? "Intraday momentum" : "Swing trend"} signals
           </h2>
+          {nextUpdateAt && (
+            <span className="text-xs text-zinc-500" title="Signals and levels only change when a candle closes">
+              Next {data?.interval} candle close in <Countdown to={nextUpdateAt} />
+            </span>
+          )}
           <div className="flex rounded-lg bg-white/5 p-0.5 ring-1 ring-white/10">
             {FILTERS.map((f) => (
               <button

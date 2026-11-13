@@ -1,7 +1,7 @@
 "use client";
 
 import { actionTone, formatPct, formatPrice, TONE_CLASSES } from "@/lib/format";
-import type { Signal } from "@/lib/types";
+import type { Bias, MarketStructure, Signal, TradeStatus } from "@/lib/types";
 import { TimeAgo } from "./TimeAgo";
 
 interface SignalCardProps {
@@ -12,9 +12,40 @@ interface SignalCardProps {
 
 const pctFrom = (from: number, to: number) => ((to - from) / from) * 100;
 
+const CONFIDENCE_CLASS = (c: number) => (c >= 80 ? "text-emerald-400" : c >= 55 ? "text-amber-400" : "text-zinc-500");
+
+const STATUS_TEXT: Record<TradeStatus, string> = {
+  Active: "● Active — within entry/stop",
+  "TP1 hit": "✓ TP1 hit",
+  "TP2 hit": "✓✓ TP2 hit — target reached",
+  "Stopped out": "✕ Stopped out",
+};
+const STATUS_CLASS: Record<TradeStatus, string> = {
+  Active: "text-sky-300",
+  "TP1 hit": "text-emerald-400",
+  "TP2 hit": "text-emerald-300",
+  "Stopped out": "text-rose-400",
+};
+
+const STRUCTURE_TEXT: Record<MarketStructure, string> = {
+  uptrend: "▲ HH / HL",
+  downtrend: "▼ LH / LL",
+  range: "◆ Range",
+};
+const STRUCTURE_CLASS: Record<MarketStructure, string> = {
+  uptrend: "text-emerald-400",
+  downtrend: "text-rose-400",
+  range: "text-zinc-400",
+};
+const PATTERN_CLASS: Record<Bias, string> = {
+  bullish: "bg-emerald-500/10 text-emerald-300 ring-emerald-500/20",
+  bearish: "bg-rose-500/10 text-rose-300 ring-rose-500/20",
+  neutral: "bg-zinc-500/10 text-zinc-400 ring-zinc-500/20",
+};
+
 export function SignalCard({ signal, selected, onSelect }: SignalCardProps) {
   const tone = TONE_CLASSES[actionTone(signal.action)];
-  const { levels } = signal;
+  const { levels, priceAction: pa } = signal;
   const entryMid = levels ? (levels.entryLow + levels.entryHigh) / 2 : signal.price;
   const directionLabel = signal.direction === "long" ? "Buy" : signal.direction === "short" ? "Sell" : "No trade";
 
@@ -55,7 +86,24 @@ export function SignalCard({ signal, selected, onSelect }: SignalCardProps) {
             mature
           </span>
         )}
+        <span
+          className={`ml-auto font-mono text-[11px] tabular-nums ${CONFIDENCE_CLASS(signal.confidence)}`}
+          title="Share of indicator and price action checks passing"
+        >
+          {signal.confidence}% conf.
+        </span>
       </div>
+
+      {signal.status && (
+        <div className={`-mt-2 text-[11px] font-medium ${STATUS_CLASS[signal.status]}`}>
+          {STATUS_TEXT[signal.status]}
+          {signal.levelsPrice !== null && (
+            <span className="font-normal text-zinc-500">
+              {" "}· levels set at ${formatPrice(signal.levelsPrice)} ({formatPct(pctFrom(signal.levelsPrice, signal.price))} since)
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Levels */}
       {levels ? (
@@ -99,6 +147,43 @@ export function SignalCard({ signal, selected, onSelect }: SignalCardProps) {
           </li>
         ))}
       </ul>
+
+      {/* Price action */}
+      <div className="space-y-1.5 rounded-lg bg-white/[0.02] p-2.5 ring-1 ring-white/5">
+        <div className="flex items-center justify-between">
+          <p className="text-[10px] uppercase tracking-wider text-zinc-500">Price action</p>
+          <span className={`text-[11px] font-medium ${STRUCTURE_CLASS[pa.structure]}`} title={pa.structureLabel}>
+            {STRUCTURE_TEXT[pa.structure]}
+          </span>
+        </div>
+        <div className="flex justify-between font-mono text-[11px] tabular-nums">
+          <span className="text-zinc-500">
+            S <span className="text-emerald-300/80">{pa.support !== null ? formatPrice(pa.support) : "—"}</span>
+          </span>
+          <span className="text-zinc-500">
+            R <span className="text-rose-300/80">{pa.resistance !== null ? formatPrice(pa.resistance) : "—"}</span>
+          </span>
+        </div>
+        {pa.breakout && (
+          <p className={`text-[11px] ${pa.breakout === "bullish" ? "text-emerald-400" : "text-rose-400"}`}>
+            {pa.breakout === "bullish" ? "▲ Broke above last swing high" : "▼ Broke below last swing low"}
+          </p>
+        )}
+        {pa.patterns.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {pa.patterns.map((p) => (
+              <span
+                key={p.name}
+                title={`${p.description} (${p.barsAgo === 0 ? "last candle" : `${p.barsAgo} candles ago`})`}
+                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ${PATTERN_CLASS[p.bias]}`}
+              >
+                {p.name}
+                {p.barsAgo > 0 && <span className="opacity-50"> · {p.barsAgo}</span>}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="mt-auto flex items-center justify-between border-t border-white/5 pt-3 text-[11px] text-zinc-500">
         <span>
